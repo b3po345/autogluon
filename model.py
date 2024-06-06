@@ -78,6 +78,7 @@ def preprocess_data(df):
     except Exception as e:
         logging.error(f"Произошла ошибка во время предварительной обработки данных: {e}")
         return pd.DataFrame()
+    
 
 def load_data_from_binance(symbols, interval, limit, conn):
     try:
@@ -101,13 +102,16 @@ def load_data_from_binance(symbols, interval, limit, conn):
         df_concatenated = pd.concat(data_frames)
         df_concatenated.to_sql('binance_prices', conn, if_exists='replace', index=False)
 
-        return df_concaten
+        return df_concatenated
 
-    
-def train_autogluon_model(symbols, interval, limit, num_bagging_folds=16, auto_stack="gpu", mem_limit=10)
+    except Exception as e:
+        logging.error(f"Error in loading data from Binance: {str(e)}")
+        return None
+
+def train_autogluon_model(symbols, interval, limit, num_bagging_folds=16, auto_stack="gpu", mem_limit=10):
     try:
         start_total_time = time.time()
-        logging.info("Начало обучения...")
+        logging.info("Training started...")
 
         conn = create_connection()
         if conn is None:
@@ -117,44 +121,45 @@ def train_autogluon_model(symbols, interval, limit, num_bagging_folds=16, auto_s
         data = load_data_from_binance(symbols, interval, limit, conn)
         if data is None:
             return None, None
-        logging.info("Данные успешно загружены.")
+        logging.info("Data successfully loaded.")
 
         start_preprocess_time = time.time()
         preprocessed_data = preprocess_data(data)
         if preprocessed_data is None or preprocessed_data.empty:
             return None, None
-        logging.info("Данные успешно предобработаны.")
+        logging.info("Data preprocessed successfully.")
         preprocess_duration = time.time() - start_preprocess_time
-        logging.info(f"Время предобработки данных: {preprocess_duration} секунд.")
+        logging.info(f"Data preprocessing time: {preprocess_duration} seconds.")
 
         label = preprocessed_data.iloc[:, -1]
 
         start_model_time = time.time()
 
-        # Обучение модели
+        # Model training
         kwargs = {
             "presets": 'best_quality',
             "auto_stack": auto_stack,
             "num_cpus": 4,
-            "num_bag_folds": num_bagging_folds  # Используем num_bag_folds вместо num_bagging_folds
+            "num_bag_folds": num_bagging_folds  # Using num_bag_folds instead of num_bagging_folds
         }
         predictor = TabularPredictor(label='symbol').fit(train_data=preprocessed_data, verbosity=3, **kwargs)
-        logging.info("Модель успешно обучена.")
+        logging.info("Model trained successfully.")
 
         model_duration = time.time() - start_model_time
-        logging.info(f"Время обучения модели: {model_duration} секунд.")
+        logging.info(f"Model training time: {model_duration} seconds.")
 
         total_duration = time.time() - start_total_time
-        logging.info(f"Общее время выполнения: {total_duration} секунд.")
+        logging.info(f"Total execution time: {total_duration} seconds.")
 
-        # Сохранение модели
+        # Saving the model
         predictor.save("autogluon_model")
-        
+
         return preprocessed_data, predictor
 
     except Exception as e:
-        logging.error(f"Ошибка в процессе обучения модели: {str(e)}")
+        logging.error(f"Error in model training process: {str(e)}")
         return None, None
+
 
 def load_models(models_dir):
     """
@@ -189,8 +194,6 @@ def main():
 
     preprocessed_df, predictor = train_autogluon_model(symbols, interval=interval, limit=limit, num_bagging_folds=16, auto_stack="gpu", mem_limit=10)
 
-
-
     if preprocessed_df is not None and predictor is not None:
         # Загрузка модели
         models_dir = "autogluon_model"
@@ -199,27 +202,49 @@ def main():
             print("Ошибка при загрузке моделей.")
             return
 
-        
-        # Получение новых данных для прогнозирования
-        # Здесь нужно реализовать ваш код для загрузки новых данных
+        try:
+            # Получение новых данных для прогнозирования
+            file_paths = ['D:/Admin/Desktop/бот2/Logs']  # Список путей к вашим файлам txt
+            new_data = pd.DataFrame()  # Создание пустого DataFrame для объединения данных
 
-        # Предварительная обработка данных
-        new_data = preprocess_data_for_prediction(new_data)
-        if new_data is None:
-            print("Ошибка при предварительной обработке данных для прогнозирования.")
-            return
+            for file_path in file_paths:
+                try:
+                    # Чтение данных из файла с учётом ошибочных строк
+                    temp_data = pd.read_csv(file_path, error_bad_lines=False, warn_bad_lines=True)
+                    # Объединение данных
+                    new_data = pd.concat([new_data, temp_data], ignore_index=True)
+                except pd.errors.ParserError as e:
+                    print(f"Ошибка при чтении файла '{file_path}': {e}")
 
-        # Прогнозирование
-        predictions = make_predictions(new_data, predictor)
-        if predictions is None:
-            print("Ошибка при прогнозировании.")
-            return
+            if not new_data.empty:
+                # Сохранение объединенных данных в новый файл в формате CSV
+                new_data.to_csv('data_for_autogluon.csv', index=False)
 
-        # Визуализация результатов прогнозирования
-        visualize_data_and_predictions(new_data, predictions)
+                # Предварительная обработка данных
+                new_data = preprocess_data_for_prediction(new_data)
+                if new_data is None:
+                    print("Ошибка при предварительной обработке новых данных для прогнозирования.")
+                    return
+
+                # Прогнозирование
+                predictions = make_predictions(new_data, predictor)
+                if predictions is None:
+                    print("Ошибка при прогнозировании на основе новых данных.")
+                    return
+
+                # Визуализация результатов прогнозирования
+                visualize_data_and_predictions(new_data, predictions)
+
+            else:
+                print("Нет данных для обработки.")
+                # Дальнейшие действия в случае отсутствия данных
+
+        except pd.errors.ParserError as e:
+            print("Ошибка при чтении CSV-файла:", e)
+            # Дальнейшие действия в случае ошибки чтения CSV-файла
 
     else:
         print("Во время обучения модели произошла ошибка. Проверьте журналы для получения дополнительной информации.")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
