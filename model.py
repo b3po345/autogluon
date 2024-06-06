@@ -6,6 +6,8 @@ import ta
 from sklearn.preprocessing import StandardScaler
 from binance.client import Client
 from autogluon.tabular import TabularPredictor
+from autogluon.core.scheduler import FIFOScheduler
+from autogluon.core import Real, Categorical, Integer
 import sqlite3
 import logging.config
 
@@ -136,13 +138,17 @@ def train_autogluon_model(symbols, interval, limit, num_bagging_folds=16, auto_s
         start_model_time = time.time()
 
         # Model training
-        kwargs = {
-            "presets": 'best_quality',
-            "auto_stack": auto_stack,
-            "num_cpus": 4,
-            "num_bag_folds": num_bagging_folds  # Using num_bag_folds instead of num_bagging_folds
-        }
-        predictor = TabularPredictor(label='symbol').fit(train_data=preprocessed_data, verbosity=3, **kwargs)
+        search_space = {'NN': {'num_epochs': Integer(5, 100)},
+                        'GBM': {'num_boost_round': Integer(5, 100)}}
+
+        predictor = TabularPredictor(label='symbol', problem_type='multiclass', eval_metric='accuracy')
+
+        predictor.fit(train_data=preprocessed_data,
+                       hyperparameters={'search_space': search_space},
+                       scheduler_options={'resource': {'num_cpus': 4, 'num_gpus': 1},
+                                          'searcher': 'random',
+                                          'max_t': 100,
+                                          'grace_period': 20})
         logging.info("Model trained successfully.")
 
         model_duration = time.time() - start_model_time
@@ -159,7 +165,6 @@ def train_autogluon_model(symbols, interval, limit, num_bagging_folds=16, auto_s
     except Exception as e:
         logging.error(f"Error in model training process: {str(e)}")
         return None, None
-
 
 def load_models(models_dir):
     """
